@@ -50,9 +50,20 @@ server_name () {
 server_https () {
     cd /etc/nginx/sites-available/
     if [[ "$NGINX_FORCE_SSL" ]] && ! grep -q https elasticbeanstalk-nginx-docker-proxy.conf ; then
-        sed -i 's|location \/ {|location \/ {\n\n        if ($http_x_forwarded_proto != "https") {\n                rewrite ^ https:\/\/$host$request_uri? permanent;\n        }\n|' elasticbeanstalk-nginx-docker-proxy.conf
-    fi
-}
+        # Adds in ngnix configuration after "location /":
+        #
+        # set $redirect_https 1;
+        # if ($uri ~* "/api/health*") {
+        #   set $redirect_https 0;
+        # }
+        # if ($http_x_forwarded_proto = "https") {
+        #   set $redirect_https 0;
+        # }
+        # if ($redirect_https) {
+        #   rewrite ^ https://$host$request_uri? permanent;
+        # }
+        #
+        sed -i 's|location \/ {|location \/ {|\n\n set $redirect_https 1;\n if ($uri ~* "\/api\/health*") {\n set $redirect_https 0;\n }\n if ($http_x_forwarded_proto = "https") {\n set $redirect_https 0;\n }\n if ($redirect_https) {\n rewrite ^ https://$host$request_uri? permanent;\n }\n\n' elasticbeanstalk-nginx-docker-proxy.conf
 
 # download, install and configure papertrail
 install_papertrail () {
@@ -101,3 +112,25 @@ log_x_real_ip)
     log_x_real_ip
     ;;
 esac
+
+The bug:
+* Deploy metabase on AWS EBeanstalk with docker.
+* Setup https from client to load balancer. Trafic between load balancer and instances are in http.
+* Add env variable NGINX_FORCE_SSL
+* Setup EBeanstalk health check on /api/health.
+* The previous nginx configuration redirects all requests without the header http_x_forwarded_proto set to 'https'.
+* The health checks request are being responded with 301. So EBeanstalk marks the instances as not usable.
+
+The fix: don't force https for healthe checks. Here is the check decoded:
+```bash
+set $redirect_https 1;
+if ($uri ~* "/api/health*") {
+  set $redirect_https 0;
+}
+if ($http_x_forwarded_proto = "https") {
+  set $redirect_https 0;
+}
+if ($redirect_https) {
+  rewrite ^ https://$host$request_uri? permanent;
+}
+```
